@@ -14,7 +14,8 @@ public class ToolDefinitions {
 			.name(getToolName(method))
 			.description(getToolDescription(method))
 			.inputSchema(JsonSchemaGenerator.generateForMethodInput(method))
-			.streamable(isStreamable(method));
+			.streamable(isStreamable(method))
+            .taskSupport(getTaskSupport(method));
 	}
 
 	public static ToolDefinition from(Method method) {
@@ -47,5 +48,14 @@ public class ToolDefinitions {
 		}
 		return tool.streamable();
 	}
+
+    public static String getTaskSupport(Method method) {
+        Assert.notNull(method, "method cannot be null");
+        Tool tool = method.getAnnotation(Tool.class);
+        if (tool == null) {
+            return "forbidden";
+        }
+        return tool.taskSupport();
+    }
 
 }

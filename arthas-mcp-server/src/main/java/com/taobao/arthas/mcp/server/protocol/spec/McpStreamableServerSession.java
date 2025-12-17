@@ -174,8 +174,28 @@ public class McpStreamableServerSession implements McpSession {
         return requestHandler
                 .handle(new McpNettyServerExchange(this.id, stream, clientCapabilities.get(), 
                         clientInfo.get(), transportContext), commandContext, jsonrpcRequest.getParams())
-                .thenApply(result -> new McpSchema.JSONRPCResponse(McpSchema.JSONRPC_VERSION, 
-                        jsonrpcRequest.getId(), result, null))
+                .handle((result, ex) -> {
+                    if (ex != null) {
+                        Throwable cause = ex;
+                        if (cause instanceof java.util.concurrent.CompletionException) {
+                            cause = cause.getCause();
+                        }
+
+                        McpSchema.JSONRPCResponse.JSONRPCError jsonRpcError;
+                        if (cause instanceof McpError && ((McpError) cause).getJsonRpcError() != null) {
+                            jsonRpcError = ((McpError) cause).getJsonRpcError();
+                        } else {
+                            jsonRpcError = new McpSchema.JSONRPCResponse.JSONRPCError(McpSchema.ErrorCodes.INTERNAL_ERROR,
+                                    cause.getMessage(), McpError.aggregateExceptionMessages(cause));
+                        }
+
+                        return new McpSchema.JSONRPCResponse(McpSchema.JSONRPC_VERSION, jsonrpcRequest.getId(),
+                                null, jsonRpcError);
+                    } else {
+                        return new McpSchema.JSONRPCResponse(McpSchema.JSONRPC_VERSION,
+                                jsonrpcRequest.getId(), result, null);
+                    }
+                })
                 .thenCompose(response -> transport.sendMessage(response, null))
                 .thenCompose(v -> transport.closeGracefully());
     }

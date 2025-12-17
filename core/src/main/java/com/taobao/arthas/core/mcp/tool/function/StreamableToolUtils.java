@@ -88,6 +88,13 @@ public final class StreamableToolUtils {
                     List<Object> currentBatchResults = getCommandSpecificResults(filteredResults);
                     
                     if (currentBatchResults != null && !currentBatchResults.isEmpty()) {
+                        // 如果是 Task 模式，将结果实时追加到 Task Output
+                        if (commandContext.getTaskContext() != null) {
+                            for (Object res : currentBatchResults) {
+                                commandContext.getTaskContext().appendOutput(res.toString());
+                            }
+                        }
+                        
                         allResults.addAll(currentBatchResults);
                         totalResultCount += currentBatchResults.size();
                         logger.debug("Collected {} results, total: {}", currentBatchResults.size(), totalResultCount);

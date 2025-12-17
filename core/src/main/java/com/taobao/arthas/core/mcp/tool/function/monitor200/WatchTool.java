@@ -21,7 +21,8 @@ public class WatchTool extends AbstractArthasTool {
     @Tool(
         name = "watch",
         description = "Watch 方法执行观察工具: 观察指定方法的调用情况，包括入参、返回值和抛出异常等信息，支持实时流式输出。对应 Arthas 的 watch 命令。",
-        streamable = true
+        streamable = true,
+        taskSupport = "required"
     )
     public String watch(
             @ToolParam(description = "类名表达式匹配，支持通配符，如demo.MathGame")

@@ -29,7 +29,7 @@ public final class McpSchema {
 	private McpSchema() {
 	}
 
-    public static final String LATEST_PROTOCOL_VERSION = ProtocolVersions.MCP_2025_06_18;
+    public static final String LATEST_PROTOCOL_VERSION = ProtocolVersions.MCP_2025_11_25;
 
 	public static final String JSONRPC_VERSION = "2.0";
 
@@ -84,6 +84,14 @@ public final class McpSchema {
 
 	// Elicitation Methods
     public static final String METHOD_ELICITATION_CREATE = "elicitation/create";
+
+	// Tasks Methods
+	public static final String METHOD_TASKS_LIST = "tasks/list";
+	public static final String METHOD_TASKS_GET = "tasks/get";
+	public static final String METHOD_TASKS_RESULT = "tasks/result"; // Blocking result retrieval
+	public static final String METHOD_TASKS_CANCEL = "tasks/cancel";
+	public static final String METHOD_NOTIFICATION_TASKS_STATUS = "notifications/tasks/status";
+	public static final String METHOD_NOTIFICATION_TASKS_LIST_CHANGED = "notifications/tasks/list_changed";
 
 	private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
@@ -512,18 +520,31 @@ public final class McpSchema {
 		private final PromptCapabilities prompts;
 		private final ResourceCapabilities resources;
 		private final ToolCapabilities tools;
+		private final TaskCapabilities tasks;
 
 		public ServerCapabilities(
 				@JsonProperty("experimental") Map<String, Object> experimental,
 				@JsonProperty("logging") LoggingCapabilities logging,
 				@JsonProperty("prompts") PromptCapabilities prompts,
 				@JsonProperty("resources") ResourceCapabilities resources,
-				@JsonProperty("tools") ToolCapabilities tools) {
+				@JsonProperty("tools") ToolCapabilities tools,
+				@JsonProperty("tasks") TaskCapabilities tasks) {
 			this.experimental = experimental;
 			this.logging = logging;
 			this.prompts = prompts;
 			this.resources = resources;
 			this.tools = tools;
+			this.tasks = tasks;
+		}
+
+		// Backward compatibility constructor
+		public ServerCapabilities(
+				Map<String, Object> experimental,
+				LoggingCapabilities logging,
+				PromptCapabilities prompts,
+				ResourceCapabilities resources,
+				ToolCapabilities tools) {
+			this(experimental, logging, prompts, resources, tools, null);
 		}
 
 		public static Builder builder() {
@@ -536,6 +557,7 @@ public final class McpSchema {
 			private PromptCapabilities prompts;
 			private ResourceCapabilities resources;
 			private ToolCapabilities tools;
+			private TaskCapabilities tasks;
 
 			public Builder experimental(Map<String, Object> experimental) {
 				this.experimental = experimental;
@@ -561,9 +583,14 @@ public final class McpSchema {
 				this.tools = tools;
 				return this;
 			}
+			
+			public Builder tasks(TaskCapabilities tasks) {
+				this.tasks = tasks;
+				return this;
+			}
 
 			public ServerCapabilities build() {
-				return new ServerCapabilities(experimental, logging, prompts, resources, tools);
+				return new ServerCapabilities(experimental, logging, prompts, resources, tools, tasks);
 			}
 		}
 
@@ -618,6 +645,19 @@ public final class McpSchema {
 			}
 		}
 
+		@JsonInclude(JsonInclude.Include.NON_ABSENT)
+		public static class TaskCapabilities {
+			private final Boolean listChanged;
+
+			public TaskCapabilities(@JsonProperty("listChanged") Boolean listChanged) {
+				this.listChanged = listChanged;
+			}
+
+			public Boolean getListChanged() {
+				return listChanged;
+			}
+		}
+
 		public Map<String, Object> getExperimental() {
 			return experimental;
 		}
@@ -636,6 +676,10 @@ public final class McpSchema {
 
 		public ToolCapabilities getTools() {
 			return tools;
+		}
+
+		public TaskCapabilities getTasks() {
+			return tasks;
 		}
 	}
 
@@ -1361,14 +1405,21 @@ public final class McpSchema {
 		private final String name;
 		private final String description;
 		private final JsonSchema inputSchema;
+		private final ToolExecution execution;
 
 		public Tool(
 				@JsonProperty("name") String name,
 				@JsonProperty("description") String description,
-				@JsonProperty("inputSchema") JsonSchema inputSchema) {
+				@JsonProperty("inputSchema") JsonSchema inputSchema,
+				@JsonProperty("execution") ToolExecution execution) {
 			this.name = name;
 			this.description = description;
 			this.inputSchema = inputSchema;
+			this.execution = execution;
+		}
+		
+		public Tool(String name, String description, JsonSchema inputSchema) {
+			this(name, description, inputSchema, null);
 		}
 
 		public String getName() {
@@ -1381,6 +1432,24 @@ public final class McpSchema {
 
 		public JsonSchema getInputSchema() {
 			return inputSchema;
+		}
+		
+		public ToolExecution getExecution() {
+			return execution;
+		}
+	}
+
+	@JsonInclude(JsonInclude.Include.NON_ABSENT)
+	@JsonIgnoreProperties(ignoreUnknown = true)
+	public static class ToolExecution {
+		private final String taskSupport;
+
+		public ToolExecution(@JsonProperty("taskSupport") String taskSupport) {
+			this.taskSupport = taskSupport;
+		}
+
+		public String getTaskSupport() {
+			return taskSupport;
 		}
 	}
 
@@ -1402,14 +1471,17 @@ public final class McpSchema {
 		private final String name;
 		private final Map<String, Object> arguments;
 		private final Map<String, Object> meta;
+		private final Map<String, Object> task;
 
 		public CallToolRequest(
 				@JsonProperty("name") String name,
 				@JsonProperty("arguments") Map<String, Object> arguments,
-				@JsonProperty("_meta") Map<String, Object> meta) {
+				@JsonProperty("_meta") Map<String, Object> meta,
+				@JsonProperty("task") Map<String, Object> task) {
 			this.name = name;
 			this.arguments = arguments;
 			this.meta = meta;
+			this.task = task;
 		}
 
 		private static Map<String, Object> parseJsonArguments(String jsonArguments) {
@@ -1419,6 +1491,10 @@ public final class McpSchema {
 			catch (IOException e) {
 				throw new IllegalArgumentException("Invalid arguments: " + jsonArguments, e);
 			}
+		}
+		
+		public CallToolRequest(String name, Map<String, Object> arguments, Map<String, Object> meta) {
+			this(name, arguments, meta, null);
 		}
 
 		public String getName() {
@@ -1434,6 +1510,14 @@ public final class McpSchema {
 			return meta;
 		}
 
+		public Map<String, Object> getMeta() {
+			return meta;
+		}
+		
+		public Map<String, Object> getTask() {
+			return task;
+		}
+
 		public static Builder builder() {
 			return new Builder();
 		}
@@ -1445,6 +1529,8 @@ public final class McpSchema {
 			private Map<String, Object> arguments;
 
 			private Map<String, Object> meta;
+			
+			private Map<String, Object> task;
 
 			public Builder name(String name) {
 				this.name = name;
@@ -1465,6 +1551,11 @@ public final class McpSchema {
 				this.meta = meta;
 				return this;
 			}
+			
+			public Builder task(Map<String, Object> task) {
+				this.task = task;
+				return this;
+			}
 
 			public Builder progressToken(String progressToken) {
 				if (this.meta == null) {
@@ -1476,7 +1567,7 @@ public final class McpSchema {
 
 			public CallToolRequest build() {
 				Assert.hasText(name, "name must not be empty");
-				return new CallToolRequest(name, arguments, meta);
+				return new CallToolRequest(name, arguments, meta, task);
 			}
 		}
 	}
@@ -2387,4 +2478,313 @@ public final class McpSchema {
 		}
 	}
 
+	// ---------------------------
+	// Tasks
+	// ---------------------------
+
+	public enum TaskStatus {
+		@JsonProperty("pending") PENDING,
+		@JsonProperty("working") WORKING,
+		@JsonProperty("completed") COMPLETED,
+		@JsonProperty("error") ERROR,
+		@JsonProperty("cancelled") CANCELLED
+	}
+
+	@JsonInclude(JsonInclude.Include.NON_ABSENT)
+	@JsonIgnoreProperties(ignoreUnknown = true)
+	public static class Task {
+		private final String taskId;
+		private final String statusMessage;
+		private final TaskStatus status;
+		private final Long createdAt;
+		private final Long lastUpdatedAt;
+		private final Long ttl;
+		private final Long pollInterval;
+		private final Map<String, Object> output;
+		private final Map<String, Object> meta;
+
+		public Task(
+				@JsonProperty("taskId") String taskId,
+				@JsonProperty("statusMessage") String statusMessage,
+				@JsonProperty("status") TaskStatus status,
+				@JsonProperty("createdAt") Long createdAt,
+				@JsonProperty("lastUpdatedAt") Long lastUpdatedAt,
+				@JsonProperty("ttl") Long ttl,
+				@JsonProperty("pollInterval") Long pollInterval,
+				@JsonProperty("output") Map<String, Object> output,
+				@JsonProperty("_meta") Map<String, Object> meta) {
+			this.taskId = taskId;
+			this.statusMessage = statusMessage;
+			this.status = status;
+			this.createdAt = createdAt;
+			this.lastUpdatedAt = lastUpdatedAt;
+			this.ttl = ttl;
+			this.pollInterval = pollInterval;
+			this.output = output;
+			this.meta = meta;
+		}
+
+		public String getTaskId() {
+			return taskId;
+		}
+
+		public String getStatusMessage() {
+			return statusMessage;
+		}
+
+		public TaskStatus getStatus() {
+			return status;
+		}
+
+		public Long getCreatedAt() {
+			return createdAt;
+		}
+
+		public Long getLastUpdatedAt() {
+			return lastUpdatedAt;
+		}
+
+		public Long getTtl() {
+			return ttl;
+		}
+
+		public Long getPollInterval() {
+			return pollInterval;
+		}
+
+		public Map<String, Object> getOutput() {
+			return output;
+		}
+
+		public Map<String, Object> getMeta() {
+			return meta;
+		}
+	}
+
+	@JsonInclude(JsonInclude.Include.NON_ABSENT)
+	@JsonIgnoreProperties(ignoreUnknown = true)
+	public static class CreateTaskResult implements Result {
+		private final String taskId;
+		private final TaskStatus status;
+		private final String statusMessage;
+		private final Map<String, Object> meta;
+
+		public CreateTaskResult(
+				@JsonProperty("taskId") String taskId,
+				@JsonProperty("status") TaskStatus status,
+				@JsonProperty("statusMessage") String statusMessage,
+				@JsonProperty("_meta") Map<String, Object> meta) {
+			this.taskId = taskId;
+			this.status = status;
+			this.statusMessage = statusMessage;
+			this.meta = meta;
+		}
+
+		public String getTaskId() {
+			return taskId;
+		}
+
+		public TaskStatus getStatus() {
+			return status;
+		}
+
+		public String getStatusMessage() {
+			return statusMessage;
+		}
+
+		@Override
+		public Map<String, Object> meta() {
+			return meta;
+		}
+
+		public Map<String, Object> getMeta() {
+			return meta();
+		}
+	}
+
+	@JsonInclude(JsonInclude.Include.NON_ABSENT)
+	@JsonIgnoreProperties(ignoreUnknown = true)
+	public static class ListTasksResult implements Result {
+		private final List<Task> tasks;
+		private final String nextCursor;
+		private final Map<String, Object> meta;
+
+		public ListTasksResult(
+				@JsonProperty("tasks") List<Task> tasks,
+				@JsonProperty("nextCursor") String nextCursor,
+				@JsonProperty("_meta") Map<String, Object> meta) {
+			this.tasks = tasks;
+			this.nextCursor = nextCursor;
+			this.meta = meta;
+		}
+
+		public ListTasksResult(List<Task> tasks, String nextCursor) {
+			this(tasks, nextCursor, null);
+		}
+
+		public List<Task> getTasks() {
+			return tasks;
+		}
+
+		public String getNextCursor() {
+			return nextCursor;
+		}
+
+		@Override
+		public Map<String, Object> meta() {
+			return meta;
+		}
+
+		public Map<String, Object> getMeta() {
+			return meta();
+		}
+	}
+
+	@JsonInclude(JsonInclude.Include.NON_ABSENT)
+	@JsonIgnoreProperties(ignoreUnknown = true)
+	public static class GetTaskResult implements Result {
+		private final String taskId;
+		private final String statusMessage;
+		private final TaskStatus status;
+		private final Long createdAt;
+		private final Long lastUpdatedAt;
+		private final Long ttl;
+		private final Long pollInterval;
+		private final Map<String, Object> output;
+		private final Map<String, Object> meta;
+
+		public GetTaskResult(
+				@JsonProperty("taskId") String taskId,
+				@JsonProperty("statusMessage") String statusMessage,
+				@JsonProperty("status") TaskStatus status,
+				@JsonProperty("createdAt") Long createdAt,
+				@JsonProperty("lastUpdatedAt") Long lastUpdatedAt,
+				@JsonProperty("ttl") Long ttl,
+				@JsonProperty("pollInterval") Long pollInterval,
+				@JsonProperty("output") Map<String, Object> output,
+				@JsonProperty("_meta") Map<String, Object> meta) {
+			this.taskId = taskId;
+			this.statusMessage = statusMessage;
+			this.status = status;
+			this.createdAt = createdAt;
+			this.lastUpdatedAt = lastUpdatedAt;
+			this.ttl = ttl;
+			this.pollInterval = pollInterval;
+			this.output = output;
+			this.meta = meta;
+		}
+
+		public String getTaskId() {
+			return taskId;
+		}
+
+		public String getStatusMessage() {
+			return statusMessage;
+		}
+
+		public TaskStatus getStatus() {
+			return status;
+		}
+
+		public Long getCreatedAt() {
+			return createdAt;
+		}
+
+		public Long getLastUpdatedAt() {
+			return lastUpdatedAt;
+		}
+
+		public Long getTtl() {
+			return ttl;
+		}
+
+		public Long getPollInterval() {
+			return pollInterval;
+		}
+
+		public Map<String, Object> getOutput() {
+			return output;
+		}
+
+		@Override
+		public Map<String, Object> meta() {
+			return meta;
+		}
+		
+		public Map<String, Object> getMeta() {
+			return meta();
+		}
+	}
+
+	@JsonInclude(JsonInclude.Include.NON_ABSENT)
+	@JsonIgnoreProperties(ignoreUnknown = true)
+	public static class CancelTaskRequest implements Request {
+		private final String taskId;
+		private final String reason;
+		private final Map<String, Object> meta;
+
+		public CancelTaskRequest(
+				@JsonProperty("taskId") String taskId,
+				@JsonProperty("reason") String reason,
+				@JsonProperty("_meta") Map<String, Object> meta) {
+			this.taskId = taskId;
+			this.reason = reason;
+			this.meta = meta;
+		}
+
+		public String getTaskId() {
+			return taskId;
+		}
+
+		public String getReason() {
+			return reason;
+		}
+
+		@Override
+		public Map<String, Object> meta() {
+			return meta;
+		}
+	}
+
+	@JsonIgnoreProperties(ignoreUnknown = true)
+	public static class TaskNotification {
+		private final String taskId;
+		private final TaskStatus status;
+		private final String statusMessage;
+		private final Long lastUpdatedAt;
+		private final Map<String, Object> output;
+
+		public TaskNotification(
+				@JsonProperty("taskId") String taskId,
+				@JsonProperty("status") TaskStatus status,
+				@JsonProperty("statusMessage") String statusMessage,
+				@JsonProperty("lastUpdatedAt") Long lastUpdatedAt,
+				@JsonProperty("output") Map<String, Object> output) {
+			this.taskId = taskId;
+			this.status = status;
+			this.statusMessage = statusMessage;
+			this.lastUpdatedAt = lastUpdatedAt;
+			this.output = output;
+		}
+
+		public String getTaskId() {
+			return taskId;
+		}
+
+		public TaskStatus getStatus() {
+			return status;
+		}
+
+		public String getStatusMessage() {
+			return statusMessage;
+		}
+
+		public Long getLastUpdatedAt() {
+			return lastUpdatedAt;
+		}
+
+		public Map<String, Object> getOutput() {
+			return output;
+		}
+	}
 }

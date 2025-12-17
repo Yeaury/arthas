@@ -1,6 +1,7 @@
 package com.taobao.arthas.mcp.server.session;
 
 import com.taobao.arthas.mcp.server.CommandExecutor;
+import com.taobao.arthas.mcp.server.task.context.TaskContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,6 +28,8 @@ public class ArthasCommandContext {
     private volatile boolean executionComplete = false;
     private final List<Object> results = new CopyOnWriteArrayList<>();
     private final Lock resultLock = new ReentrantLock();
+    
+    private TaskContext taskContext;
 
     public ArthasCommandContext(CommandExecutor commandExecutor) {
         this.commandExecutor = Objects.requireNonNull(commandExecutor, "commandExecutor cannot be null");
@@ -146,19 +149,24 @@ public class ArthasCommandContext {
      * Interrupt the current job
      */
     public Map<String, Object> interruptJob() {
-        requireSessionSupport();
-        return commandExecutor.interruptJob(binding.getArthasSessionId());
+        if (binding != null) {
+            return commandExecutor.interruptJob(binding.getArthasSessionId());
+        }
+        return null;
     }
 
-    /**
-     * Set session userId for statistics reporting
-     *
-     * @param userId 用户 ID
-     */
     public void setSessionUserId(String userId) {
         if (binding != null && userId != null) {
             commandExecutor.setSessionUserId(binding.getArthasSessionId(), userId);
             logger.debug("Set userId for session {}: {}", binding.getArthasSessionId(), userId);
         }
+    }
+    
+    public void setTaskContext(TaskContext taskContext) {
+        this.taskContext = taskContext;
+    }
+
+    public TaskContext getTaskContext() {
+        return taskContext;
     }
 }

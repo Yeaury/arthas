@@ -18,7 +18,8 @@ public class TraceTool extends AbstractArthasTool {
     @Tool(
         name = "trace",
         description = "Trace 方法内部调用路径跟踪工具: 追踪方法内部调用路径，输出每个节点的耗时信息，对应 Arthas 的 trace 命令。",
-        streamable = true
+        streamable = true,
+        taskSupport = "required"
     )
     public String trace(
             @ToolParam(description = "类名表达式匹配，支持通配符，如demo.MathGame")

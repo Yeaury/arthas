@@ -50,7 +50,8 @@ public final class McpToolUtils {
 		McpSchema.Tool tool = new McpSchema.Tool(
 				toolCallback.getToolDefinition().getName(),
 				toolCallback.getToolDefinition().getDescription(),
-				toolCallback.getToolDefinition().getInputSchema()
+				toolCallback.getToolDefinition().getInputSchema(),
+				new McpSchema.ToolExecution(toolCallback.getToolDefinition().taskSupport())
 		);
 
 		McpServerFeatures.ToolCallFunction callFunction = (exchange, commandContext, request) -> {
@@ -100,7 +101,8 @@ public final class McpToolUtils {
 		McpSchema.Tool tool = new McpSchema.Tool(
 				toolCallback.getToolDefinition().getName(),
 				toolCallback.getToolDefinition().getDescription(),
-				toolCallback.getToolDefinition().getInputSchema()
+				toolCallback.getToolDefinition().getInputSchema(),
+				new McpSchema.ToolExecution(toolCallback.getToolDefinition().taskSupport())
 		);
 
 		McpStatelessServerFeatures.ToolCallFunction callFunction = (context, commandContext, arguments) -> {

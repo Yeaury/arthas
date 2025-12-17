@@ -51,7 +51,8 @@ public class McpServerFeatures {
 						new McpSchema.ServerCapabilities.LoggingCapabilities(),
 						!Utils.isEmpty(prompts) ? new McpSchema.ServerCapabilities.PromptCapabilities(false) : null,
 						!Utils.isEmpty(resources) ? new McpSchema.ServerCapabilities.ResourceCapabilities(false, false) : null,
-						!Utils.isEmpty(tools) ? new McpSchema.ServerCapabilities.ToolCapabilities(false) : null);
+						!Utils.isEmpty(tools) ? new McpSchema.ServerCapabilities.ToolCapabilities(false) : null,
+						new McpSchema.ServerCapabilities.TaskCapabilities(false));
 			}
 
 			this.tools = (tools != null) ? tools : Collections.emptyList();

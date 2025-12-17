@@ -8,6 +8,10 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.taobao.arthas.mcp.server.CommandExecutor;
 import com.taobao.arthas.mcp.server.protocol.spec.*;
+import com.taobao.arthas.mcp.server.task.InMemoryTaskManager;
+import com.taobao.arthas.mcp.server.task.TaskManager;
+import com.taobao.arthas.mcp.server.task.context.ArthasTaskContext;
+import com.taobao.arthas.mcp.server.task.context.TaskContext;
 import com.taobao.arthas.mcp.server.util.Assert;
 import com.taobao.arthas.mcp.server.util.Utils;
 import org.slf4j.Logger;
@@ -47,6 +51,8 @@ public class McpNettyServer {
 	private final ConcurrentHashMap<String, McpServerFeatures.ResourceSpecification> resources = new ConcurrentHashMap<>();
 
 	private final ConcurrentHashMap<String, McpServerFeatures.PromptSpecification> prompts = new ConcurrentHashMap<>();
+
+	private final TaskManager taskManager = new InMemoryTaskManager();
 
 	private McpSchema.LoggingLevel minLoggingLevel = McpSchema.LoggingLevel.DEBUG;
 
@@ -127,6 +133,14 @@ public class McpNettyServer {
 		// Add logging API handlers if the logging capability is enabled
 		if (this.serverCapabilities.getLogging() != null) {
 			requestHandlers.put(McpSchema.METHOD_LOGGING_SET_LEVEL, setLoggerRequestHandler());
+		}
+
+		// Add tasks API handlers if the tasks capability is enabled
+		if (this.serverCapabilities.getTasks() != null) {
+			requestHandlers.put(McpSchema.METHOD_TASKS_LIST, tasksListRequestHandler());
+			requestHandlers.put(McpSchema.METHOD_TASKS_CANCEL, tasksCancelRequestHandler());
+			requestHandlers.put(McpSchema.METHOD_TASKS_GET, tasksGetRequestHandler());
+			requestHandlers.put(McpSchema.METHOD_TASKS_RESULT, tasksResultRequestHandler());
 		}
 
 		return requestHandlers;
@@ -282,6 +296,9 @@ public class McpNettyServer {
 
 	private McpRequestHandler<McpSchema.ListToolsResult> toolsListRequestHandler() {
 		return (exchange, commandContext, params) -> {
+			// Update exchange in task manager
+			taskManager.setSessionExchange(exchange);
+			
 			List<McpSchema.Tool> tools = new ArrayList<>();
 			for (McpServerFeatures.ToolSpecification toolSpec : this.tools) {
 				tools.add(toolSpec.getTool());
@@ -291,22 +308,172 @@ public class McpNettyServer {
 		};
 	}
 
-	private McpRequestHandler<McpSchema.CallToolResult> toolsCallRequestHandler() {
+	private McpRequestHandler<Object> toolsCallRequestHandler() {
 		return (exchange, commandContext, params) -> {
+			// Update exchange in task manager
+			taskManager.setSessionExchange(exchange);
+
 			McpSchema.CallToolRequest callToolRequest = objectMapper.convertValue(params,
 					new TypeReference<McpSchema.CallToolRequest>() {
 					});
+			
 			Optional<McpServerFeatures.ToolSpecification> toolSpecification = this.tools.stream()
 				.filter(tr -> callToolRequest.getName().equals(tr.getTool().getName()))
 				.findAny();
 
 			if (!toolSpecification.isPresent()) {
-				CompletableFuture<McpSchema.CallToolResult> future = new CompletableFuture<>();
-				future.completeExceptionally(new McpError("no tool found: " + callToolRequest.getName()));
+				CompletableFuture<Object> future = new CompletableFuture<>();
+				future.completeExceptionally(McpError.builder(McpSchema.ErrorCodes.INVALID_PARAMS)
+						.message("no tool found: " + callToolRequest.getName())
+						.build());
 				return future;
 			}
 
-			return toolSpecification.get().getCall().apply(exchange, commandContext, callToolRequest);
+			// Validate task support
+			String taskSupport = toolSpecification.get().getTool().getExecution() != null
+					? toolSpecification.get().getTool().getExecution().getTaskSupport()
+					: "forbidden";
+			boolean isTaskRequest = isTaskRequest(callToolRequest);
+
+			if ("required".equals(taskSupport) && !isTaskRequest) {
+				CompletableFuture<Object> future = new CompletableFuture<>();
+				future.completeExceptionally(McpError.builder(McpSchema.ErrorCodes.METHOD_NOT_FOUND )
+						.message("Tool '" + callToolRequest.getName() + "' must be called as a task")
+						.build());
+				return future;
+			}
+			if ("forbidden".equals(taskSupport) && isTaskRequest) {
+				CompletableFuture<Object> future = new CompletableFuture<>();
+				future.completeExceptionally(McpError.builder(McpSchema.ErrorCodes.METHOD_NOT_FOUND)
+						.message("Tool '" + callToolRequest.getName() + "' cannot be called as a task")
+						.build());
+				return future;
+			}
+			
+			// Check if it is a task request
+			if (isTaskRequest) {
+				// Create task
+				McpSchema.Task task = taskManager.createTask(callToolRequest.getMeta());
+				
+				// Create task context
+				TaskContext taskContext = new ArthasTaskContext(task.getTaskId(), taskManager);
+				taskContext.onCancelled(() -> commandContext.interruptJob());
+				commandContext.setTaskContext(taskContext);
+				
+				// Register context to manager for cancellation support
+				if (taskManager instanceof InMemoryTaskManager) {
+					((InMemoryTaskManager) taskManager).registerTaskContext(task.getTaskId(), taskContext);
+				}
+				
+				// Update task status to working
+				taskManager.updateTask(task.getTaskId(), McpSchema.TaskStatus.WORKING, "Task started", null);
+				
+				// Execute asynchronously
+				CompletableFuture<McpSchema.CallToolResult> executionFuture = toolSpecification.get().getCall()
+						.apply(exchange, commandContext, callToolRequest);
+				
+				executionFuture.whenComplete((result, ex) -> {
+					if (ex != null) {
+						taskManager.updateTask(task.getTaskId(), McpSchema.TaskStatus.ERROR, ex.getMessage(), null);
+					} else {
+						Map<String, Object> output = new HashMap<>();
+						if (result.getContent() != null && !result.getContent().isEmpty()) {
+							// For simplicity, putting the first content item text as output if possible
+							// Ideally we should structure this better
+							output.put("result", result); 
+						}
+						// Merge with logs if any
+						McpSchema.Task currentTask = taskManager.getTask(task.getTaskId());
+						if (currentTask != null && currentTask.getOutput() != null) {
+							output.putAll(currentTask.getOutput());
+						}
+						
+						taskManager.updateTask(task.getTaskId(), McpSchema.TaskStatus.COMPLETED, "Completed", output);
+					}
+				});
+				
+				return CompletableFuture.completedFuture(new McpSchema.CreateTaskResult(
+						task.getTaskId(), task.getStatus(), task.getStatusMessage(), null
+				));
+			}
+
+			return toolSpecification.get().getCall().apply(exchange, commandContext, callToolRequest)
+					.thenApply(result -> (Object) result);
+		};
+	}
+	
+	private boolean isTaskRequest(McpSchema.CallToolRequest request) {
+		return request.getTask() != null || (request.getMeta() != null && request.getMeta().containsKey("task"));
+	}
+
+	private McpRequestHandler<McpSchema.ListTasksResult> tasksListRequestHandler() {
+		return (exchange, commandContext, params) -> {
+			taskManager.setSessionExchange(exchange);
+			// Extract cursor if needed, currently ignoring
+			return CompletableFuture.completedFuture(taskManager.listTasks(null));
+		};
+	}
+
+	private McpRequestHandler<McpSchema.GetTaskResult> tasksGetRequestHandler() {
+		return (exchange, commandContext, params) -> {
+			taskManager.setSessionExchange(exchange);
+			Map<String, Object> paramsMap = objectMapper.convertValue(params, Map.class);
+			String taskId = (String) paramsMap.get("taskId");
+			
+			if (taskId == null) {
+				CompletableFuture<McpSchema.GetTaskResult> future = new CompletableFuture<>();
+				future.completeExceptionally(new McpError("taskId is required"));
+				return future;
+			}
+
+			McpSchema.Task task = taskManager.getTask(taskId);
+			if (task == null) {
+				CompletableFuture<McpSchema.GetTaskResult> future = new CompletableFuture<>();
+				future.completeExceptionally(new McpError("Task not found: " + taskId));
+				return future;
+			}
+
+			return CompletableFuture.completedFuture(new McpSchema.GetTaskResult(
+					task.getTaskId(), task.getStatusMessage(), task.getStatus(),
+					task.getCreatedAt(), task.getLastUpdatedAt(), task.getTtl(),
+					task.getPollInterval(), task.getOutput(), task.getMeta()
+			));
+		};
+	}
+
+	private McpRequestHandler<McpSchema.GetTaskResult> tasksResultRequestHandler() {
+		return (exchange, commandContext, params) -> {
+			taskManager.setSessionExchange(exchange);
+			Map<String, Object> paramsMap = objectMapper.convertValue(params, Map.class);
+			String taskId = (String) paramsMap.get("taskId");
+
+			if (taskId == null) {
+				CompletableFuture<McpSchema.GetTaskResult> future = new CompletableFuture<>();
+				future.completeExceptionally(new McpError("taskId is required"));
+				return future;
+			}
+
+			return taskManager.waitForTask(taskId);
+		};
+	}
+
+	private McpRequestHandler<McpSchema.Task> tasksCancelRequestHandler() {
+		return (exchange, commandContext, params) -> {
+			taskManager.setSessionExchange(exchange);
+			McpSchema.CancelTaskRequest request = objectMapper.convertValue(params, McpSchema.CancelTaskRequest.class);
+			
+			McpSchema.Task task = taskManager.cancelTask(request.getTaskId(), request.getReason());
+			if (task == null) {
+				CompletableFuture<McpSchema.Task> future = new CompletableFuture<>();
+				future.completeExceptionally(new McpError("Task not found: " + request.getTaskId()));
+				return future;
+			}
+			
+			// Note: We should also try to cancel the underlying future if we had a reference to it.
+			// But for now, we just update the status.
+			// In a real implementation, we might want to store the Future in the Task object or a separate map.
+			
+			return CompletableFuture.completedFuture(task);
 		};
 	}
 

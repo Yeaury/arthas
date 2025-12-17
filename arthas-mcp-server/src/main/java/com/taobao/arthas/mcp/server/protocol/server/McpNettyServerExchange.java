@@ -73,6 +73,10 @@ public class McpNettyServerExchange {
 		this.clientInfo = clientInfo;
 		this.transportContext = transportContext;
 	}
+
+    public CompletableFuture<Void> sendNotification(String method, Object params) {
+        return session.sendNotification(method, params);
+    }
 	/**
 	 * Get client capabilities.
 	 * @return Client capabilities

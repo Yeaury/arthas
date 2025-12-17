@@ -24,7 +24,8 @@ public class StackTool extends AbstractArthasTool {
     @Tool(
         name = "stack",
         description = "Stack 调用堆栈跟踪工具: 输出当前方法被调用的调用路径，帮助分析方法的调用链路。对应 Arthas 的 stack 命令。",
-        streamable = true
+        streamable = true,
+        taskSupport = "required"
     )
     public String stack(
             @ToolParam(description = "类名表达式匹配，支持通配符，如demo.MathGame")
